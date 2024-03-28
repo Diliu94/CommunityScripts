@@ -13,10 +13,10 @@ request_s = requests.Session()
 
 def processScene(scene):
     for sid in scene["stash_ids"]:
-        if sid["endpoint"] == "https://metadataapi.net/graphql":
+        if sid["endpoint"] == "https://theporndb.net/graphql":
             log.debug("Scene has a TPDB stash id, looking up %s " % (sid["stash_id"],))
             res = request_s.get(
-                "https://api.metadataapi.net/scenes/%s" % (sid["stash_id"],)
+                "https://api.theporndb.net/scenes/%s" % (sid["stash_id"],)
             )
             if res.status_code == 200:
                 if "data" in res.json():
@@ -46,7 +46,7 @@ def processAll():
     count = stash.find_scenes(
         f={
             "stash_id_endpoint": {
-                "endpoint": "https://metadataapi.net/graphql",
+                "endpoint": "https://theporndb.net/graphql",
                 "modifier": "NOT_NULL",
                 "stash_id": "",
             },
@@ -75,7 +75,7 @@ def processAll():
         scenes = stash.find_scenes(
             f={
                 "stash_id_endpoint": {
-                    "endpoint": "https://metadataapi.net/graphql",
+                    "endpoint": "https://theporndb.net/graphql",
                     "modifier": "NOT_NULL",
                     "stash_id": "",
                 },
@@ -95,12 +95,20 @@ json_input = json.loads(sys.stdin.read())
 FRAGMENT_SERVER = json_input["server_connection"]
 stash = StashInterface(FRAGMENT_SERVER)
 
+config = stash.get_configuration()["plugins"]
+settings = {
+    "disableSceneMarkerHook": False,
+}
+if "tPdBmarkers" in config:
+    settings.update(config["tPdBmarkers"])
+log.debug("settings: %s " % (settings,))
+
 # Set up the auth token for tpdb
-if "https://metadataapi.net/graphql" in [
+if "https://theporndb.net/graphql" in [
     x["endpoint"] for x in stash.get_configuration()["general"]["stashBoxes"]
 ]:
     for x in stash.get_configuration()["general"]["stashBoxes"]:
-        if x["endpoint"] == "https://metadataapi.net/graphql":
+        if x["endpoint"] == "https://theporndb.net/graphql":
             request_s.headers["Authorization"] = "Bearer %s" % (x["api_key"],)
 
     if "mode" in json_input["args"]:
@@ -108,9 +116,10 @@ if "https://metadataapi.net/graphql" in [
         if "processScene" in PLUGIN_ARGS:
             processAll()
     elif "hookContext" in json_input["args"]:
-        id = json_input["args"]["hookContext"]["id"]
-        if json_input["args"]["hookContext"]["type"] == "Scene.Update.Post":
-            scene = stash.find_scene(id)
+        _id = json_input["args"]["hookContext"]["id"]
+        _type = json_input["args"]["hookContext"]["type"]
+        if _type == "Scene.Update.Post" and not settings["disableSceneMarkerHook"]:
+            scene = stash.find_scene(_id)
             processScene(scene)
 
 else:

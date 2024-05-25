@@ -1,0 +1,14 @@
+name: Funscript Buttplug.io
+# requires: StashUserscriptLibrary
+description: Connects to Intiface
+version: 0.0.1
+ui:
+  requires:
+    - StashUserscriptLibrary
+  javascript:
+    - https://cdn.jsdelivr.net/npm/buttplug@3.2.2/dist/web/buttplug.js
+    - buttplug-tampermonkey-ui.js
+    - funscriptButtplugio.js
+  csp:
+    script-src:
+      - https://cdn.jsdelivr.net

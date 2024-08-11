@@ -4,18 +4,24 @@
   const userSettings = await csLib.getConfiguration("hotCards", {});
   const SEPARATOR = "_";
   const INNER_SEPARATOR = ",";
+  const INNER_SEGMENT_SEPARATOR = "/";
   const DEFAULTS = {
     criterion: "",
-    value: "",
-    style: "default",
+    value: [""],
+    style: ["default"],
     gradient_opts: {
       type: "linear",
       angle: "0deg",
       animation: "",
     },
-    border_opts: {
+    hover_opts: {
       color: "transparent",
       animation: "",
+    },
+    card_opts: {
+      fill: true,
+      opacity: 80,
+      animate: false,
     },
   };
   const CRITERIA = { tag: "t", rating: "r", disabled: "d" };
@@ -48,7 +54,14 @@
     default: getDefaultStylePreset(),
     hot: getHotStylePreset(),
     gold: getGoldStylePreset(),
+    holo: getHoloStylePreset(),
   };
+
+  /**
+   * Element to inject custom CSS styles.
+   */
+  const styleElement = document.createElement("style");
+  document.head.appendChild(styleElement);
 
   const isTagBased = TAG_ID?.length;
   const isRatingBased = RATING_THRESHOLD !== 0;
@@ -57,6 +70,7 @@
 
   let backupCards = [];
   let hotCards = [];
+  let hotCardClasses = [];
 
   function parseSettings(settings) {
     return Object.keys(settings).reduce((acc, key) => {
@@ -74,26 +88,54 @@
 
     return {
       criterion: segments[0] || DEFAULTS.criterion,
-      value: segments[1] || DEFAULTS.value,
-      style: segments[2] || DEFAULTS.style,
-      gradient_opts: parseSegment(segments[3], DEFAULTS.gradient_opts, [
+      value: parseValues(segments[1]) || DEFAULTS.value,
+      style: parseValues(segments[2]) || DEFAULTS.style,
+      gradient_opts: parseArraySegment(segments[3], DEFAULTS.gradient_opts, [
         "type",
         "angle",
         "animation",
       ]),
-      border_opts: parseSegment(segments[4], DEFAULTS.border_opts, [
+      hover_opts: parseArraySegment(segments[4], DEFAULTS.hover_opts, [
         "color",
         "animation",
+      ]),
+      card_opts: parseArraySegment(segments[5], DEFAULTS.card_opts, [
+        "fill",
+        "opacity",
+        "animate",
       ]),
     };
   }
 
-  function parseSegment(segment, defaults, keys) {
-    const values = segment ? segment.split(INNER_SEPARATOR) : [];
-    return keys.reduce((acc, key, index) => {
-      acc[key] = values[index] || defaults[key];
-      return acc;
-    }, {});
+  function parseArraySegment(segment, defaults, keys) {
+    if (!segment) return [defaults];
+
+    const parsedValues = parseValues(segment);
+
+    // If parsedValues is a single array, convert it to an array of arrays
+    const segmentsArray = Array.isArray(parsedValues[0])
+      ? parsedValues
+      : [parsedValues];
+
+    return segmentsArray.map((valuesArray) =>
+      keys.reduce((acc, key, index) => {
+        acc[key] = valuesArray[index] || defaults[key];
+        return acc;
+      }, {})
+    );
+  }
+
+  function parseValues(values) {
+    if (typeof values !== "string") return values;
+
+    const parts = values.split(INNER_SEGMENT_SEPARATOR);
+
+    if (parts.length === 1)
+      return parts[0].split(INNER_SEPARATOR).map((item) => item.trim());
+
+    return parts.map((part) =>
+      part.split(INNER_SEPARATOR).map((item) => item.trim())
+    );
   }
 
   // Mapping of configuration keys to functions
@@ -123,8 +165,12 @@
    */
   function handleHomeHotCards() {
     const pattern = /^\/$/;
+    let timeoutId;
+
+    overrideHistoryMethods(() => clearTimeout(timeoutId));
+
     registerPathChangeListener(pattern, () => {
-      setTimeout(() => {
+      timeoutId = setTimeout(() => {
         for (const card of Object.values(CARDS))
           if (card.enabled) handleHotCards(card, true);
       }, 3000);
@@ -258,52 +304,109 @@
    * @param {boolean} isHome - Flag indicating if the current page is the homepage.
    */
   function createAndInsertHotCards(stashData, cardClass, config, isHome) {
-    const isCriterionTag = config.criterion === CRITERIA.tag;
-    const isCriterionRating = config.criterion === CRITERIA.rating;
-    const isCriterionEmpty = config.criterion.length === 0;
-    const valueNotSet = config.value.length === 0;
+    const { criterion, value, style, card_opts } = config;
+    const cards = document.querySelectorAll(`.${cardClass}`);
     const isCriterionTagOrEmpty =
-      isTagBased && (isCriterionTag || isCriterionEmpty);
+      isTagBased && (criterion === CRITERIA.tag || criterion.length === 0);
     const isCriterionRatingOrEmpty =
-      isRatingBased && (isCriterionRating || isCriterionEmpty);
+      isRatingBased &&
+      (criterion === CRITERIA.rating || criterion.length === 0);
 
-    /**
-     * To avoid DOM exceptions, it runs if `hotCards` is empty and we are not in the home page
-     * or if we are in the home page.
-     */
-    if (hotCards.length === 0 || isHome) {
-      const cards = document.querySelectorAll(`.${cardClass}`);
+    // Skip processing if hotCards are already present and we're not on the home page.
+    if (hotCards.length !== 0 && !isHome) return;
 
-      cards.forEach((card) => {
-        const link = card.querySelector(".thumbnail-section > a");
-        const id = new URL(link.href).pathname.split("/").pop();
-        const data = stashData[id];
+    cards.forEach((card) => {
+      const link = card.querySelector(".thumbnail-section > a");
+      const id = new URL(link.href).pathname.split("/").pop();
+      const data = stashData[id];
 
-        if (isCriterionTagOrEmpty) {
-          if (data?.tags?.length) {
-            // If the tag ID for this card type is not set, use the default tag ID.
-            const tagId = valueNotSet ? TAG_ID : config.value;
-            data.tags.forEach((tag) => {
-              if (tag.id === tagId)
-                createHotElementAndAttachToDOM(card, cardClass, isHome);
-            });
-          }
-        } else if (isCriterionRatingOrEmpty && data?.rating100) {
-          const rating = isStarsRatingSystem
-            ? data.rating100 / 20
-            : data.rating100;
-          // If the rating threshold for this card type is not set, use the default threshold.
-          const ratingThreshold = valueNotSet ? RATING_THRESHOLD : config.value;
-          if (rating >= ratingThreshold)
-            createHotElementAndAttachToDOM(card, cardClass, isHome);
-        }
-      });
-    }
+      if (!data) return;
+
+      const segmentParams = findMatchingValueSegment(
+        value,
+        data.tags,
+        data.rating100,
+        isCriterionTagOrEmpty,
+        isCriterionRatingOrEmpty,
+        style,
+        card_opts
+      );
+
+      if (segmentParams) {
+        const classId = segmentParams.value.join("-").replace(/\./g, "-");
+        const hotCardEl = createHotElementAndAttachToDOM(
+          card,
+          cardClass,
+          classId,
+          isHome
+        );
+        checkHoloCardAndAttachToDOM(
+          hotCardEl,
+          cardClass,
+          segmentParams.style,
+          segmentParams.cardOptions
+        );
+      }
+    });
   }
 
-  function createHotElementAndAttachToDOM(cardElement, cardClass, isHome) {
+  function findMatchingValueSegment(
+    value,
+    tags,
+    rating,
+    isCriterionTagOrEmpty,
+    isCriterionRatingOrEmpty,
+    style,
+    cardOptions
+  ) {
+    for (let i = 0; i < value.length; i++) {
+      const segment = value[i];
+      const valueNotSet = segment.length === 0;
+      const segmentOrValue = Array.isArray(segment) ? segment : value;
+
+      if (
+        (isCriterionTagOrEmpty &&
+          matchesTagCriterion(tags, segmentOrValue, valueNotSet)) ||
+        (isCriterionRatingOrEmpty &&
+          matchesRatingCriterion(rating, segmentOrValue, valueNotSet))
+      ) {
+        const v = segmentOrValue || [""];
+        const s = style[i] || style[0];
+        const co = cardOptions[i] || cardOptions[0];
+        return { value: v, style: s, cardOptions: co };
+      }
+
+      if (segmentOrValue === value) break;
+    }
+    return null;
+  }
+
+  function matchesTagCriterion(tags, valueSegment, valueNotSet) {
+    if (!tags) return false;
+
+    const tagIds = valueNotSet ? [TAG_ID] : valueSegment;
+    return tagIds.every((tag) => tags.some((t) => t.id === tag));
+  }
+
+  function matchesRatingCriterion(rating, valueSegment, valueNotSet) {
+    if (!rating) return false;
+
+    const parsedRating = isStarsRatingSystem ? rating / 20 : rating;
+    const ratingThresholds = valueNotSet ? [RATING_THRESHOLD] : valueSegment;
+    return ratingThresholds.length > 1
+      ? ratingThresholds.includes(parsedRating.toString())
+      : parsedRating >= ratingThresholds[0];
+  }
+
+  function createHotElementAndAttachToDOM(
+    cardElement,
+    className,
+    classId,
+    isHome
+  ) {
+    const hotCardClassName = `hot-${className}-${classId}`;
     const hotElement = createElementFromHTML(
-      `<div class="hot-card hot-${cardClass}">`
+      `<div class="hot-card ${hotCardClassName}">`
     );
     if (isHome) hotElement.style.height = "100%";
 
@@ -312,6 +415,8 @@
     cardElement.before(hotElement);
     hotElement.append(cardElement);
     hotCards.push(hotElement);
+
+    return hotElement;
   }
 
   function createElementFromHTML(htmlString) {
@@ -324,35 +429,95 @@
    * Sets the style of the hot card based on the user's configuration.
    */
   function setHotCardStyling(card) {
-    const { style, gradient_opts, border_opts } = card.config;
-    const colors = style.split(INNER_SEPARATOR).map((color) => color.trim());
-    const styleElement = document.createElement("style");
+    const { value, style, gradient_opts, hover_opts, card_opts } = card.config;
+    const hotElement = document.querySelector(".hot-card");
+    // Check if the hot card already contains all the necessary classes
+    const hotCardContainsAllClasses = hotCardClasses.every((hotCardClass) =>
+      hotElement?.classList.contains(hotCardClass)
+    );
 
-    const pseudoElementStyle =
-      colors.length === 1
-        ? applySingleColorStyle(card, colors[0], gradient_opts, border_opts)
-        : applyCustomGradientStyle(card, colors, gradient_opts, border_opts);
+    if (hotCardClasses.length === 0 || !hotCardContainsAllClasses) {
+      const pseudoElementStyles = value.map((segment, index) => {
+        const segmentOrValue = Array.isArray(segment) ? segment : value;
+        const classId = segmentOrValue.join("-").replace(/\./g, "-");
+        const hotCardClass = `.hot-${card.class}-${classId}`;
 
-    styleElement.innerHTML = pseudoElementStyle;
-    document.head.appendChild(styleElement);
+        // Skip if the hot card class is already present
+        if (hotCardClasses.includes(hotCardClass)) return;
+
+        hotCardClasses.push(hotCardClass);
+        const currentStyle = Array.isArray(style[index]) ? style[index] : style;
+        const gradientOptions = gradient_opts[index] || gradient_opts[0];
+        const hoverOptions = hover_opts[index] || hover_opts[0];
+        const cardOptions = card_opts[index] || card_opts[0];
+
+        // If there is only a single style, get the single color style
+        if (style.length === 1 || style[index].length === 1) {
+          return getSingleColorStyle(
+            hotCardClass,
+            style[index] || style[0],
+            gradientOptions,
+            hoverOptions,
+            cardOptions
+          );
+        }
+
+        return getCustomGradientStyle(
+          hotCardClass,
+          currentStyle,
+          gradientOptions,
+          hoverOptions,
+          cardOptions
+        );
+      });
+
+      // Join pseudo styles to the style element
+      styleElement.innerHTML += pseudoElementStyles.join("");
+    }
   }
 
   /**
    * Apply a single color style, which can be a style preset or a fixed color.
    */
-  function applySingleColorStyle(card, color, gradient_opts, border_opts) {
-    if (STYLES[color])
-      return applyPresetStyle(card, STYLES[color], gradient_opts, border_opts);
-    else return applyFixedColorStyle(card, color, border_opts);
+  function getSingleColorStyle(
+    hotCardClass,
+    color,
+    gradientOptions,
+    hoverOptions,
+    cardOptions
+  ) {
+    return STYLES[color]
+      ? getPresetStyle(
+          hotCardClass,
+          STYLES[color],
+          gradientOptions,
+          hoverOptions,
+          cardOptions
+        )
+      : /**
+         * Get a fixed color style.
+         */
+        getHotCardPseudoElementString(
+          hotCardClass,
+          color,
+          hoverOptions,
+          cardOptions
+        );
   }
 
   /**
    * Apply a style preset.
    */
-  function applyPresetStyle(card, preset, gradient_opts, border_opts) {
-    const { gradient, border } = preset;
-    const { angle, animation } = gradient_opts;
-    const { color: borderColor, animation: borderAnimation } = border_opts;
+  function getPresetStyle(
+    hotCardClass,
+    preset,
+    gradientOptions,
+    hoverOptions,
+    cardOptions
+  ) {
+    const { gradient, hover, card } = preset;
+    const { angle, animation } = gradientOptions;
+    const { color: hoverColor, animation: hoverAnimation } = hoverOptions;
 
     // Update gradient options with preset defaults if not provided
     const updatedGradientOpts = {
@@ -361,65 +526,83 @@
       animation: animation || gradient.animation,
     };
 
-    // Update border options with preset defaults if not provided
-    const updatedBorderOpts = {
+    // Update hover options with preset defaults if not provided
+    const updatedHoverOpts = {
       color:
-        borderColor !== DEFAULTS.border_opts.color ? borderColor : border.color,
-      animation: borderAnimation || border.animation,
+        hoverColor !== DEFAULTS.hover_opts.color ? hoverColor : hover.color,
+      animation: hoverAnimation || hover.animation,
     };
 
-    return applyCustomGradientStyle(
-      card,
+    // Update card options with preset defaults if not provided
+    const updatedCardOpts = {
+      fill:
+        cardOptions.fill !== DEFAULTS.card_opts.fill
+          ? cardOptions.fill
+          : card.fill,
+      opacity:
+        cardOptions.opacity !== DEFAULTS.card_opts.opacity
+          ? cardOptions.opacity
+          : card.opacity,
+      additional: card.additional,
+    };
+
+    return getCustomGradientStyle(
+      hotCardClass,
       gradient.colors,
       updatedGradientOpts,
-      updatedBorderOpts
+      updatedHoverOpts,
+      updatedCardOpts
     );
-  }
-
-  /**
-   * Apply a fixed color style.
-   */
-  function applyFixedColorStyle(card, color, border_opts) {
-    setBorder(card, border_opts.color, border_opts.animation);
-    return getHotCardPseudoElementString(card, color);
   }
 
   /**
    * If there are more than one color, it's a custom gradient.
    */
-  function applyCustomGradientStyle(card, colors, gradient_opts, border_opts) {
-    const { type, angle, animation } = gradient_opts;
+  function getCustomGradientStyle(
+    hotCardClass,
+    colors,
+    gradientOptions,
+    hoverOptions,
+    cardOptions
+  ) {
+    const { type, angle, animation } = gradientOptions;
     const gradient = getGradient(type, angle, colors);
-    setBorder(card, border_opts.color, border_opts.animation);
-    return getHotCardPseudoElementString(card, gradient, animation);
-  }
-
-  function setBorder(card, color, animation = "") {
-    animation = animation ? `pulse ${animation}` : "";
-    document
-      .querySelectorAll(`.hot-${card.class} > .hot-border`)
-      .forEach((card) => {
-        card.style.setProperty("--border-color", color);
-        card.style.animation = animation;
-      });
+    return getHotCardPseudoElementString(
+      hotCardClass,
+      gradient,
+      hoverOptions,
+      cardOptions,
+      animation
+    );
   }
 
   function getGradient(type, positionAngle = "", colors) {
     const positionAngleStr = positionAngle ? `${positionAngle},` : "";
+    if (type === "stacked") return colors.join(", ");
     return `${type}-gradient(${positionAngleStr} ${colors.join(", ")})`;
   }
 
   function getHotCardPseudoElementString(
-    card,
+    hotCardClass,
     background,
+    hoverOptions,
+    cardOptions,
     gradientAnimation = "",
     filter = ""
   ) {
+    const opacity = getFixedBackgroundOpacity(cardOptions.opacity);
+    const fill = /true/i.test(cardOptions.fill);
     const gradientAnimationStr = gradientAnimation
       ? `animation: move ${gradientAnimation};`
       : "";
+    const hoverAnimationStr = hoverOptions.animation
+      ? `animation: pulse ${hoverOptions.animation};`
+      : "";
+    const additionalAttrStr = cardOptions.additional
+      ? cardOptions.additional
+      : "";
+    const fillStr = fill ? `background-color: rgba(0, 0, 0, ${opacity});` : "";
     const filterStr = filter ? `filter: ${filter};` : "";
-    const hotCardClass = `.hot-${card.class}`;
 
     return `${hotCardClass}::before,
       ${hotCardClass}::after {
@@ -434,32 +617,150 @@
         background-size: 300% 300%;
         background-position: 0 50%;
         ${gradientAnimationStr}
+        ${additionalAttrStr}
+      }
+      ${hotCardClass} > .hot-border {
+        --hover-color: ${hoverOptions.color};
+        ${hoverAnimationStr}
+        ${fillStr}
       }
       ${hotCardClass}::after {
         ${filterStr}
       }`;
   }
 
+  function checkHoloCardAndAttachToDOM(
+    hotCardEl,
+    cardClass,
+    style,
+    cardOptions
+  ) {
+    if (STYLES[style] !== STYLES.holo) return;
+
+    const animateCard = /true/i.test(cardOptions.animate);
+    const cardClasses = ["image-card", "scene-card", "studio-card"];
+    const classInArray = cardClasses.includes(cardClass);
+    const isStudioCard = cardClass === "studio-card";
+    const isImageOrSceneCard = classInArray && !isStudioCard;
+    const classSuffix = isImageOrSceneCard ? "preview-image" : "image";
+    const imgClass = `.${cardClass}-${classSuffix}`;
+    const targetEl = hotCardEl.querySelector(imgClass);
+
+    if (!targetEl) return;
+
+    const holoEl = createElementFromHTML(`<div class="holo"></div>`);
+    const shineEl = createElementFromHTML(`<div class="shine"></div>`);
+    const seedX = getRandomInt(100);
+    const seedY = getRandomInt(100);
+
+    const calculateAspectRatio = (width, height) => width / height;
+    const calculateDegrees = (aspectRatio, degreesOffset) =>
+      degreesOffset + Math.atan(aspectRatio) * (180 / Math.PI);
+    const setFixedAspectRatio = (el, aspectRatio) => {
+      el.style.setProperty("aspect-ratio", aspectRatio.toFixed(3));
+    };
+    const applyInitialStyles = () => {
+      if (isStudioCard) {
+        holoEl.style.display = "block";
+        shineEl.style.position = "absolute";
+        shineEl.style.top = "0px";
+        shineEl.style.left = "0px";
+      }
+      holoEl.style.setProperty("--posx", `${seedX}%`);
+      holoEl.style.setProperty("--posy", `${seedY}%`);
+    };
+
+    targetEl.classList.add("holo-img");
+    targetEl.before(holoEl);
+    holoEl.append(targetEl);
+    holoEl.append(shineEl);
+    applyInitialStyles();
+
+    waitForImageLoad(targetEl, () => {
+      const hotBorderEl = hotCardEl.querySelector(".hot-border");
+
+      if (!hotBorderEl) return;
+
+      const studioCardMarginSize = 5;
+      const isSceneCard = cardClass === "scene-card";
+      const degreesOffset = isStudioCard ? 98 : isSceneCard ? 83 : 97;
+      let aspectRatio = 0;
+      let degrees = 0;
+
+      // Delay to ensure the resizing of the width for the cardClass element / hotBorderEl has been completed
+      setTimeout(() => {
+        if (isStudioCard) {
+          aspectRatio = calculateAspectRatio(
+            hotBorderEl.offsetWidth - studioCardMarginSize,
+            hotBorderEl.offsetHeight - studioCardMarginSize
+          );
+          degrees = Math.floor(calculateDegrees(aspectRatio, degreesOffset));
+        } else {
+          aspectRatio = calculateAspectRatio(
+            hotBorderEl.offsetWidth,
+            targetEl.offsetHeight
+          );
+          degrees = Math.round(calculateDegrees(aspectRatio, degreesOffset));
+        }
+
+        holoEl.style.setProperty("--angle", `${degrees}deg`);
+        setFixedAspectRatio(shineEl, aspectRatio);
+      }, 100);
+    });
+
+    if (animateCard) animateHoloCards(holoEl, seedX, seedY);
+  }
+
+  function animateHoloCards(holoEl, seedX, seedY) {
+    const increment = 0.05;
+    let posX = seedX;
+    let posY = seedY;
+    let add = increment;
+
+    function animate() {
+      posX += add;
+      posY += add;
+
+      if (posX > 100) add = -increment;
+      if (posY > 100) add = -increment;
+      if (posX < 0) add = increment;
+      if (posY < 0) add = increment;
+
+      holoEl.style.setProperty("--posx", `${posX}%`);
+      holoEl.style.setProperty("--posy", `${posY}%`);
+
+      requestAnimationFrame(animate);
+    }
+    animate();
+  }
+
   function createCardStyle(
-    borderColor,
-    borderAnimation,
+    hoverColor,
+    hoverAnimation,
     gradientType,
     gradientAngle,
     gradientColors,
     gradientAnimation,
+    fill = DEFAULTS.card_opts.fill,
+    opacity = DEFAULTS.card_opts.opacity,
+    additional,
     filter
   ) {
     return {
-      border: {
-        color: borderColor,
-        animation: borderAnimation,
+      hover: {
+        color: hoverColor,
+        animation: hoverAnimation,
       },
       gradient: {
         type: gradientType,
         angle: gradientAngle,
         colors: gradientColors,
         animation: gradientAnimation,
-        generated: getGradient(gradientType, gradientAngle, gradientColors),
+      },
+      card: {
+        fill,
+        opacity,
+        additional,
       },
       filter,
     };
@@ -530,6 +831,27 @@
     );
   }
 
+  function getHoloStylePreset() {
+    return createCardStyle(
+      "#fbe1f6",
+      "8s ease-in-out infinite",
+      "stacked",
+      "133deg",
+      [
+        "linear-gradient(180deg, #FFB7B7 0%, #727272 100%)",
+        "radial-gradient(60.91% 100% at 50% 0%, #FFD1D1 0%, #260000 100%)",
+        "linear-gradient(238.72deg, #FDD 0%, #720066 100%)",
+        "linear-gradient(127.43deg, #0FF 0%, #F44 100%)",
+        "radial-gradient(100.22% 100% at 70.57% 0%, #69e4a5 0%, #00FFE0 100%)",
+        "linear-gradient(127.43deg, #B7D500 0%, #30F 100%)",
+      ],
+      "14s ease-in-out infinite",
+      true,
+      70,
+      "background-blend-mode: screen, overlay, hard-light, color-burn, color-dodge, normal;"
+    );
+  }
+
   /**
    * Since it was necessary to insert a div before the card for
    * the border design to be visible (otherwise the overflow:hidden; property of
@@ -553,11 +875,5 @@
     hotCards.length = 0;
   }
 
-  ["pushState", "replaceState"].forEach((method) => {
-    const original = history[method];
-    history[method] = function () {
-      restoreCards();
-      return original.apply(this, arguments);
-    };
-  });
+  overrideHistoryMethods(restoreCards);
 })();

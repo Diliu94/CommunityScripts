@@ -9,7 +9,7 @@ per_page = 100
 skip_tag = "[MiscTags: Skip]"
 
 # Defaults if nothing has changed in the stash ui
-settings = {"addStashVrCompanionTags": False,
+settings = {"addStashVRCompanionTags": False,
             "addVRTags": False,
             "addSoloTags": True,
             "addThreesomeTags": True,
@@ -28,6 +28,7 @@ VRCTags = {
     "lr_180": {"VRCTags": ["DOME", "SBS"], "projTags": ["180°"]},
     "180_lr": {"VRCTags": ["DOME", "SBS"], "projTags": ["180°"]},
     "180_3dh_lr": {"VRCTags": ["DOME", "SBS"], "projTags": ["180°"]},
+    "vr180": {"VRCTags": ["DOME", "SBS"], "projTags": ["180°"]},
     "360_tb": {"VRCTags": ["SPHERE", "TB"], "projTags": ["360°"]},
     "mkx200": {"VRCTags": ["MKX200", "FISHEYE", "SBS"], "projTags": ["200°"]},
     "mkx220": {"VRCTags": ["MKX220", "FISHEYE", "SBS"], "projTags": ["220°"]},
@@ -52,7 +53,7 @@ def processScene(scene):
     if tags_cache[skip_tag] not in [x["id"] for x in scene["tags"]]:
         tags = []
         update = False
-        if settings["addStashVrCompanionTags"]:
+        if settings["addStashVRCompanionTags"]:
             processStashVRCompanionTags(scene, tags)
             log.debug(tags)
         if settings["addVRTags"]:
